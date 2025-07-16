@@ -1,0 +1,294 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mnist-classifier
+  namespace: production
+  labels:
+    app: mnist-classifier
+    version: v1.0.0
+    environment: production
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: mnist-classifier
+  template:
+    metadata:
+      labels:
+        app: mnist-classifier
+        version: v1.0.0
+        environment: production
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: mnist-classifier-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: mnist-classifier
+        image: ghcr.io/your-org/mnist-classifier:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: MLFLOW_TRACKING_URI
+          valueFrom:
+            configMapKeyRef:
+              name: mlflow-config
+              key: tracking_uri
+        - name: MODEL_REGISTRY_URI
+          valueFrom:
+            secretKeyRef:
+              name: model-registry-secret
+              key: registry_uri
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: database-secret
+              key: url
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /startup
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+        volumeMounts:
+        - name: model-storage
+          mountPath: /app/models
+          readOnly: true
+        - name: config-volume
+          mountPath: /app/config
+          readOnly: true
+        - name: logs-volume
+          mountPath: /app/logs
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-storage-pvc
+      - name: config-volume
+        configMap:
+          name: mnist-classifier-config
+      - name: logs-volume
+        emptyDir: {}
+      nodeSelector:
+        node-type: compute
+      tolerations:
+      - key: "compute"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - mnist-classifier
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mnist-classifier-service
+  namespace: production
+  labels:
+    app: mnist-classifier
+spec:
+  selector:
+    app: mnist-classifier
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mnist-classifier-sa
+  namespace: production
+  labels:
+    app: mnist-classifier
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mnist-classifier-role
+  namespace: production
+rules:
+- apiGroups: [""]
+  resources: ["secrets", "configmaps"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mnist-classifier-rolebinding
+  namespace: production
+subjects:
+- kind: ServiceAccount
+  name: mnist-classifier-sa
+  namespace: production
+roleRef:
+  kind: Role
+  name: mnist-classifier-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mnist-classifier-config
+  namespace: production
+data:
+  config.yaml: |
+    environment:
+      name: "production"
+      debug: false
+      log_level: "INFO"
+    
+    model:
+      architecture: "CNN"
+      num_classes: 10
+    
+    api:
+      host: "0.0.0.0"
+      port: 8080
+      workers: 4
+    
+    monitoring:
+      enabled: true
+      metrics_port: 8080
+      drift_detection: true
+      
+    security:
+      enable_rbac: true
+      audit_logging: true
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-storage-pvc
+  namespace: production
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: fast-ssd
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mnist-classifier-hpa
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mnist-classifier
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 4
+        periodSeconds: 15
+      selectPolicy: Max
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mnist-classifier-pdb
+  namespace: production
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: mnist-classifier

@@ -1,0 +1,115 @@
+# MLOps Configuration
+project:
+  name: "secure-ml-mnist"
+  version: "1.0.0"
+  description: "Secure ML workflow for MNIST classification with in-toto"
+
+# Environment configuration
+environment:
+  name: "development"  # Can be: development, staging, production
+  debug: true
+  log_level: "INFO"
+
+# Data configuration
+data:
+  source: "torchvision"
+  dataset: "MNIST"
+  validation_split: 0.2
+  random_seed: 42
+  batch_size: 64
+  num_workers: 4
+  data_dir: "./data"
+  corrupt_labels: [2, 5]  # Labels to swap for corruption testing
+
+# Model configuration
+model:
+  architecture: "CNN"
+  input_size: [1, 28, 28]
+  num_classes: 10
+  dropout_rate: 0.25
+  learning_rate: 1.0
+  optimizer: "Adadelta"
+  scheduler: "StepLR"
+  step_size: 1
+  gamma: 0.7
+
+# Training configuration
+training:
+  epochs: 14
+  early_stopping_patience: 5
+  min_delta: 0.001
+  checkpoint_interval: 5
+  log_interval: 10
+  validation_interval: 1
+
+# Testing configuration
+testing:
+  batch_size: 1000
+  metrics: ["accuracy", "precision", "recall", "f1"]
+  threshold: 95.0
+  save_predictions: true
+  generate_confusion_matrix: true
+
+# Model registry
+registry:
+  backend: "mlflow"
+  tracking_uri: "sqlite:///mlflow.db"
+  experiment_name: "mnist-classification"
+  model_name: "mnist-cnn"
+  
+# Data versioning
+versioning:
+  backend: "dvc"
+  remote: "s3"
+  bucket: "mlops-data-bucket"
+  
+# Monitoring
+monitoring:
+  enabled: true
+  metrics_port: 8000
+  drift_detection: true
+  drift_threshold: 0.05
+  performance_threshold: 0.9
+
+# Security
+security:
+  enable_rbac: true
+  secret_management: "env"
+  vulnerability_scanning: true
+  audit_logging: true
+
+# API configuration
+api:
+  host: "0.0.0.0"
+  port: 8080
+  title: "MNIST Classification API"
+  version: "1.0.0"
+  docs_url: "/docs"
+
+# Infrastructure
+infrastructure:
+  containerization: true
+  orchestration: "kubernetes"
+  scaling:
+    min_replicas: 1
+    max_replicas: 10
+    target_cpu: 70
+
+# Notifications
+notifications:
+  slack:
+    enabled: false
+    webhook_url: ""
+  email:
+    enabled: false
+    smtp_server: ""
+    from_email: ""
+    to_emails: []
+
+# Compliance
+compliance:
+  enable_audit_trail: true
+  retention_policy: "90d"
+  backup_frequency: "daily"
+  encryption_at_rest: true
+  encryption_in_transit: true
